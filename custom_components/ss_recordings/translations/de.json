@@ -1,0 +1,62 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Surveillance Station verbinden",
+        "description": "Am besten einen eigenen DSM-Benutzer ohne 2-Faktor-Anmeldung mit Zugriff auf Surveillance Station verwenden.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "ssl": "HTTPS verwenden",
+          "verify_ssl": "SSL-Zertifikat prüfen",
+          "username": "Benutzername",
+          "password": "Passwort"
+        },
+        "data_description": {
+          "host": "IP-Adresse oder Hostname der NAS, z. B. 192.168.178.20",
+          "port": "DSM-Port: 5001 für HTTPS, 5000 für HTTP",
+          "verify_ssl": "Bei selbstsigniertem Zertifikat ausgeschaltet lassen"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Erneut anmelden",
+        "data": {
+          "username": "Benutzername",
+          "password": "Passwort"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "DSM nicht erreichbar. Host, Port und HTTPS-Einstellung prüfen.",
+      "invalid_auth": "Anmeldung fehlgeschlagen. Zugangsdaten prüfen und sicherstellen, dass die 2-Faktor-Anmeldung für diesen Benutzer aus ist.",
+      "no_surveillance": "Anmeldung ok, aber Surveillance Station antwortet nicht. Läuft das Paket und hat der Benutzer Zugriff?"
+    },
+    "abort": {
+      "already_configured": "Diese NAS ist bereits eingerichtet.",
+      "reauth_successful": "Erneute Anmeldung erfolgreich."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Aufnahmen",
+        "data": {
+          "lookback_hours": "Aufnahmen der letzten … anzeigen",
+          "cache_mb": "Größe des lokalen Clip-Caches",
+          "prefetch": "Neue Clips im Hintergrund laden"
+        },
+        "data_description": {
+          "lookback_hours": "Nur Aufnahmen in diesem Zeitraum erscheinen in der Karte.",
+          "prefetch": "Damit startet der Morgen-Rückblick sofort. Die Clips liegen im Home-Assistant-Konfigordner unter ss_recordings."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "recordings_24h": {
+        "name": "Aufnahmen (24 h)"
+      }
+    }
+  }
+}

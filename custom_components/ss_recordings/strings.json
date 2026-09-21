@@ -1,0 +1,62 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect Surveillance Station",
+        "description": "Use a dedicated DSM user without 2-step verification that has access to Surveillance Station.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "ssl": "Use HTTPS",
+          "verify_ssl": "Verify SSL certificate",
+          "username": "Username",
+          "password": "Password"
+        },
+        "data_description": {
+          "host": "IP address or hostname of your NAS, e.g. 192.168.178.20",
+          "port": "DSM port: 5001 for HTTPS, 5000 for HTTP",
+          "verify_ssl": "Leave off for a self-signed certificate"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach DSM. Check host, port and HTTPS setting.",
+      "invalid_auth": "Login failed. Check the credentials and make sure 2-step verification is off for this user.",
+      "no_surveillance": "Logged in, but Surveillance Station did not answer. Is the package running and does the user have access?"
+    },
+    "abort": {
+      "already_configured": "This NAS is already configured.",
+      "reauth_successful": "Re-authentication successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Recordings",
+        "data": {
+          "lookback_hours": "Keep recordings from the last",
+          "cache_mb": "Local clip cache size",
+          "prefetch": "Download new clips in the background"
+        },
+        "data_description": {
+          "lookback_hours": "Only recordings in this window are listed in the card.",
+          "prefetch": "Makes the morning review instant. Clips are stored in the Home Assistant config folder under ss_recordings."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "recordings_24h": {
+        "name": "Recordings (24h)"
+      }
+    }
+  }
+}
