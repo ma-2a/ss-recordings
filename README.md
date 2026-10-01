@@ -9,6 +9,7 @@ The built-in Synology DSM integration only exposes live streams. Event lists and
 ## Features
 
 - **Morning review card**: all clips since a time of your choice (default 20:00 the previous evening), grouped by day, newest marked as unseen.
+- **Glass look**: translucent, blurred card that picks up the colors of your theme, in light and dark.
 - **Play all**: plays unseen clips back to back, at 1×, 2× or 4× speed.
 - **Fast**: new clips are downloaded in the background and cached locally, so playback starts instantly.
 - **Works everywhere**: clips are served by Home Assistant itself through signed URLs, so they play in the browser, the companion app and over your VPN without exposing DSM.
@@ -78,6 +79,7 @@ After updating the integration, reload the browser once so the new card version 
 | `order` | `oldest` | `oldest` or `newest` first |
 | `speed` | `1` | Initial playback speed |
 | `autoplay_next` | `true` | Continue with the next clip when one ends |
+| `variant` | `glass` | `glass` for the translucent look, `plain` for a normal Home Assistant card |
 
 ```yaml
 type: custom:ss-recordings-card
@@ -90,6 +92,22 @@ speed: 2
 ```
 
 "Seen" state is stored per browser.
+
+#### Appearance
+
+The card is translucent and blurs whatever is behind it, so it works best on a dashboard with a background image or a colored theme. On a plain white background the effect is barely visible — `variant: plain` then gives the normal card look.
+
+Four CSS variables control the look. Set them in your theme (`themes.yaml`) to apply them to every instance of the card:
+
+```yaml
+my-theme:
+  ss-recordings-accent: "#ff9f0a"   # buttons, markers, highlight
+  ss-recordings-radius: 22px        # corner radius
+  ss-recordings-blur: 26px          # blur strength behind the card
+  ss-recordings-tint: "#101522"     # tint of the glass surface
+```
+
+Without these the card uses your theme's accent color and card background.
 
 ## Integration options
 
