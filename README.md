@@ -1,6 +1,6 @@
 # Surveillance Station Recordings
 
-Bring your Synology Surveillance Station **recordings** into Home Assistant: a dashboard card that shows everything recorded since last night, with thumbnails, one-tap playback and a "play all" mode for a quick morning review.
+Bring your Synology Surveillance Station **recordings** into Home Assistant: a dashboard card that shows what was recorded last night, with thumbnails, one-tap playback and a "play all" mode for a quick morning review.
 
 The built-in Synology DSM integration only exposes live streams. Event lists and recorded clips stay locked inside Surveillance Station. This integration fills that gap.
 
@@ -8,13 +8,14 @@ The built-in Synology DSM integration only exposes live streams. Event lists and
 
 ## Features
 
-- **Morning review card**: shows last night's clips by default (20:00–07:00, adjustable), with a switch to show all recordings. Unseen clips are marked.
-- **Glass look**: translucent, blurred card that picks up the colors of your theme, in light and dark.
-- **Play all**: plays unseen clips back to back, at 1×, 2× or 4× speed.
+- **Morning review card**: opens on last night (20:00–07:00, adjustable). Arrows step back through earlier nights, a switch shows all recordings.
+- **Play all**: plays unseen clips back to back, at 1×, 2× or 4× speed. Unseen clips are marked.
+- **Visual editor**: every setting of the card can be changed in the dashboard editor, no YAML needed.
 - **No duplicate storage**: clips are streamed from Surveillance Station when you play them. Only small thumbnails are kept. If Home Assistant runs on the NAS, it can read the recordings straight from disk.
+- **Download**: save any clip as an MP4 with camera name and time in the file name.
 - **Works everywhere**: clips are served by Home Assistant itself through signed URLs, so they play in the browser, the companion app and over your VPN without exposing DSM.
-- **Per-camera sensors**: number of recordings in the last 24 hours plus details of the latest one.
-- **Automation event**: `ss_recordings_new_recording` fires for every new clip.
+- **Glass look**: translucent, blurred card that picks up the colors of your theme, in light and dark.
+- **Per-camera sensors** and an **automation event** for every new clip.
 - Everything stays local. No cloud, no third-party service.
 
 ## Requirements
@@ -45,6 +46,8 @@ Use a dedicated account instead of your admin:
 2. Do **not** enable 2-step verification for this user
 3. Surveillance Station → Privilege Settings: give the user a profile with access to the cameras you want and permission to **play back** and **download** recordings
 
+An existing admin account works too, as long as it has no 2-step verification.
+
 ### 2. Add the integration
 
 Settings → Devices & services → **Add integration** → *Surveillance Station Recordings*
@@ -58,44 +61,53 @@ Settings → Devices & services → **Add integration** → *Surveillance Statio
 
 If Home Assistant runs on the same NAS, use the NAS's LAN IP.
 
+After a minute each camera shows up as a device with a "Recordings (24h)" sensor, and thumbnails are created in the background.
+
 ### 3. Add the card
 
-The card is registered automatically. Add it to any dashboard:
+Set up the integration first: the card is delivered by the integration and only exists once it is running. Then reload the browser (Cmd/Ctrl + Shift + R) and add the card to a dashboard. Search for **Surveillance Station Recordings** in the card picker, or use the manual card:
 
 ```yaml
 type: custom:ss-recordings-card
 ```
 
-All main settings are available in the visual card editor. After updating the integration, reload the browser once so the new card version is used.
+Everything below can be set in the visual editor. After updating the integration, reload the browser once so the new card version is used.
+
+#### What the card shows
+
+- **Night** (default): before the night ends, the night in progress; afterwards, the night that just ended. With the default 20:00–07:00 you see last night at 7:30 in the morning and still at 22:00 in the evening. The arrows next to the title step to earlier nights.
+- **All**: every recording within the integration's time window (48 hours by default).
+
+Click a thumbnail to play it. **Play all** starts with the first unseen clip and continues automatically. "Seen" is stored per browser.
 
 #### Card options
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `default_view` | `night` | What the card shows when it opens: `night` or `all` |
-| `night_start` | `"20:00"` | Start of the night window |
-| `night_end` | `"07:00"` | End of the night window |
+| `default_view` | `night` | View when the card opens: `night` or `all` |
+| `night_start` | `"20:00"` | Start of the night |
+| `night_end` | `"07:00"` | End of the night |
 | `show_toggle` | `true` | Show the Night / All switch |
-| `title` | "Last night" | Title of the night view |
-| `cameras` | all | List of camera names, e.g. `[Front door]` |
+| `cameras` | all | Only show these cameras, e.g. `[Front door]` |
+| `title` | automatic | Fixed title for the default night. Empty: "Last night", "Tonight" or the date |
+| `variant` | `glass` | `glass` or `plain` (normal Home Assistant card) |
+| `tile_size` | `medium` | `small`, `medium` or `large` |
 | `order` | `oldest` | `oldest` or `newest` first |
-| `speed` | `1` | Initial playback speed |
+| `max_height` | `0` | Maximum height in pixels, the list scrolls inside. `0` = no limit |
+| `show_camera` | `false` | Always show the camera name on tiles (shown automatically with several cameras) |
+| `speed` | `1` | Initial playback speed: `1`, `2` or `4` |
 | `autoplay_next` | `true` | Continue with the next clip when one ends |
-| `variant` | `glass` | `glass` for the translucent look, `plain` for a normal Home Assistant card |
-
-The night view shows the most recent night: in the morning that is last night from start to end, during the evening it is the night in progress. "All" shows every recording within the integration's time window (48 h by default).
+| `show_download` | `true` | Show the download button in the player |
 
 ```yaml
 type: custom:ss-recordings-card
-default_view: night
 night_start: "22:00"
 night_end: "06:30"
 cameras:
   - Front door
+tile_size: small
 speed: 2
 ```
-
-"Seen" state is stored per browser.
 
 #### Appearance
 
@@ -180,7 +192,8 @@ The integration logs into DSM with a dedicated Surveillance Station session, pol
 - **Surveillance Station did not answer**: the package must be running and the user needs Surveillance Station access.
 - **No thumbnails**: `ffmpeg` is missing. Playback still works.
 - **Clip does not play in the browser**: the browser can't decode the camera's codec. H.264 works everywhere. H.265 plays in Safari and in some Chromium builds. Switch the camera's stream to H.264 if needed.
-
+- **"Custom element doesn't exist: ss-recordings-card"**: the integration is not set up yet, or the browser still has an old page cached. Set up the integration, then reload with Cmd/Ctrl + Shift + R. In the companion app: Settings → Companion app → Troubleshooting → Reset frontend cache.
+- **Card shows an old version after an update**: same as above, reload without cache. Do not add the card file as a dashboard resource manually; the integration loads it.
 - **Card shows no recordings although Surveillance Station has some**: check that the DSM user may play back the camera in Surveillance Station's privilege settings. Then open the integration, use the three-dot menu → **Download diagnostics** and attach the file to an issue. It contains the raw answer from Surveillance Station (host, user and paths are removed).
 
 Enable debug logging:
