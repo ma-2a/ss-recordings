@@ -1,7 +1,7 @@
 """Constants for Surveillance Station Recordings."""
 
 DOMAIN = "ss_recordings"
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 
 CONF_VERIFY_SSL = "verify_ssl"
 CONF_LOOKBACK_HOURS = "lookback_hours"

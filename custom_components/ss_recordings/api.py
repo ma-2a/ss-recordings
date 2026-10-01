@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 import logging
 from pathlib import Path
+import re
 from typing import Any
 
 import aiohttp
@@ -49,6 +50,7 @@ class Recording:
     mount_id: int | None
     reason: str | None
     size: int | None
+    exact: bool = True
 
     @property
     def duration(self) -> int:
@@ -92,6 +94,16 @@ def _to_seconds(value: Any) -> int:
     if number > 100_000_000_000:
         number //= 1000
     return number
+
+
+_PATH_MS = re.compile(r"-(\d{13})(?:-\d+)?\.\w+$")
+
+
+def _start_from_path(path: Any) -> int:
+    if not isinstance(path, str):
+        return 0
+    match = _PATH_MS.search(path)
+    return int(match.group(1)) // 1000 if match else 0
 
 
 def _first(data: dict[str, Any], *keys: str) -> Any:
@@ -310,8 +322,13 @@ class SurveillanceApi:
             return None
         start = _to_seconds(_first(item, "startTime", "start_time", "starttime"))
         stop = _to_seconds(_first(item, "stopTime", "stop_time", "endTime", "stoptime"))
-        if not start or not stop or stop < start:
+        if not start:
+            start = _start_from_path(_first(item, "filePath", "path"))
+        if not start:
             return None
+        exact = bool(stop) and stop >= start
+        if not exact:
+            stop = start
         camera_id = int(_first(item, "cameraId", "camera_id", "camId") or 0)
         reason = _first(item, "reason", "eventType", "type")
         if isinstance(reason, int) or (isinstance(reason, str) and reason.isdigit()):
@@ -328,10 +345,27 @@ class SurveillanceApi:
             mount_id=int(mount) if mount not in (None, "") else None,
             reason=reason,
             size=int(size) if str(size or "").isdigit() else None,
+            exact=exact,
         )
 
     async def download(self, rec: Recording, target: Path) -> None:
         """Write the recording as MP4 to target (via a .part file)."""
+        if rec.exact:
+            variants = [{"offsetTimeMs": 0, "playTimeMs": rec.duration * 1000 + 1000}]
+        else:
+            variants = [{}, {"offsetTimeMs": 0, "playTimeMs": 3_600_000}]
+        last: SurveillanceError | None = None
+        for extra in variants:
+            try:
+                await self._download(rec, target, extra)
+                return
+            except SurveillanceConnectionError:
+                raise
+            except SurveillanceError as err:
+                last = err
+        raise last or SurveillanceError(f"Download of {rec.id} failed")
+
+    async def _download(self, rec: Recording, target: Path, extra: dict[str, Any]) -> None:
         part = target.with_suffix(".part")
         for attempt in range(2):
             if self._sid is None:
@@ -343,8 +377,7 @@ class SurveillanceApi:
                 "version": max_version,
                 "id": rec.id,
                 "mountId": rec.mount_id,
-                "offsetTimeMs": 0,
-                "playTimeMs": rec.duration * 1000 + 1000,
+                **extra,
                 "_sid": self._sid,
             }
             try:

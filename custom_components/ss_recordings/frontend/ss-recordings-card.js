@@ -1,4 +1,4 @@
-const CARD_VERSION = "0.2.1";
+const CARD_VERSION = "0.2.2";
 
 const STRINGS = {
   en: {
@@ -213,7 +213,7 @@ class SSRecordingsCard extends HTMLElement {
             <div class="thumb">
               <ha-icon icon="mdi:cctv"></ha-icon>
               <img loading="lazy" src="${r.thumb_url}" alt="" onerror="this.remove()">
-              <span class="dur">${fmtDuration(r.duration)}</span>
+              ${r.duration ? `<span class="dur">${fmtDuration(r.duration)}</span>` : ""}
               ${seen.has(key) ? "" : '<span class="dot"></span>'}
             </div>
             <div class="meta"><span class="time">${this._time(r.start)}</span>${showCamera ? `<span class="cam">${this._esc(r.camera_name)}</span>` : ""}</div>
@@ -238,7 +238,7 @@ class SSRecordingsCard extends HTMLElement {
         <video playsinline controls src="${r.clip_url}"></video>
         <div class="bar">
           <button class="icon" data-act="prev"><ha-icon icon="mdi:skip-previous"></ha-icon></button>
-          <div class="caption"><b>${this._esc(r.camera_name)}</b> · ${this._time(r.start, true)} · ${fmtDuration(r.duration)}</div>
+          <div class="caption"><b>${this._esc(r.camera_name)}</b> · ${this._time(r.start, true)}${r.duration ? ` · ${fmtDuration(r.duration)}` : ""}</div>
           <button class="speed" data-act="speed">${this._speed}×</button>
           <button class="icon" data-act="next"><ha-icon icon="mdi:skip-next"></ha-icon></button>
           <button class="icon" data-act="close"><ha-icon icon="mdi:close"></ha-icon></button>
