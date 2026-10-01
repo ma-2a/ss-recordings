@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
 import json
 import logging
-from pathlib import Path
 import re
 import shutil
 import time
+from datetime import timedelta
+from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -25,9 +25,12 @@ from .api import (
 from .const import (
     CACHE_DIR,
     CONF_CACHE_MB,
+    CONF_KEEP_CLIPS,
     CONF_LOOKBACK_HOURS,
     CONF_PREFETCH,
+    CONF_RECORDINGS_PATH,
     DEFAULT_CACHE_MB,
+    DEFAULT_KEEP_CLIPS,
     DEFAULT_LOOKBACK_HOURS,
     DEFAULT_PREFETCH,
     DOMAIN,
@@ -56,7 +59,13 @@ class RecordingsCoordinator(DataUpdateCoordinator[dict[int, Recording]]):
         )
         self.api = api
         self.cameras: dict[int, str] = {}
-        self.store = ClipStore(hass, entry.entry_id, api)
+        self.store = ClipStore(
+            hass,
+            entry.entry_id,
+            api,
+            keep_clips=entry.options.get(CONF_KEEP_CLIPS, DEFAULT_KEEP_CLIPS),
+            recordings_path=entry.options.get(CONF_RECORDINGS_PATH, "") or "",
+        )
         self._known: set[int] | None = None
         self._prefetch_task: asyncio.Task | None = None
 
@@ -108,16 +117,28 @@ class RecordingsCoordinator(DataUpdateCoordinator[dict[int, Recording]]):
 
 
 class ClipStore:
-    """Downloads clips on demand and keeps them on disk for fast replay."""
+    """Serves clips and keeps thumbnails (and optionally clips) on disk."""
 
-    def __init__(self, hass: HomeAssistant, entry_id: str, api: SurveillanceApi) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry_id: str,
+        api: SurveillanceApi,
+        keep_clips: bool = False,
+        recordings_path: str = "",
+    ) -> None:
         self.hass = hass
         self.api = api
+        self.keep_clips = keep_clips
+        self.recordings_root = Path(recordings_path) if recordings_path else None
         self.root = Path(hass.config.path(CACHE_DIR, entry_id))
+        self._tmp = self.root / "tmp"
         self._locks: dict[int, asyncio.Lock] = {}
+        self._thumb_locks: dict[int, asyncio.Lock] = {}
         self._download_slots = asyncio.Semaphore(2)
         self._failed: set[int] = set()
         self._durations: dict[int, int] | None = None
+        self._camera_dirs: dict[str, Path] = {}
 
     def clip_path(self, rec_id: int) -> Path:
         return self.root / f"{rec_id}.mp4"
@@ -157,6 +178,37 @@ class ClipStore:
         if not rec.exact and self._durations and rec.id in self._durations:
             rec.stop = rec.start + self._durations[rec.id]
 
+    def _find_local(self, rec: Recording) -> Path | None:
+        if self.recordings_root is None or not rec.file_path:
+            return None
+        rel = rec.file_path.lstrip("/")
+        known = self._camera_dirs.get(rec.camera_name)
+        candidates = [known / rel] if known else []
+        candidates += [self.recordings_root / rec.camera_name / rel, self.recordings_root / rel]
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+        try:
+            for folder in self.recordings_root.iterdir():
+                if folder.is_dir() and (folder / rel).is_file():
+                    self._camera_dirs[rec.camera_name] = folder
+                    return folder / rel
+        except OSError:
+            pass
+        return None
+
+    async def clip_source(self, rec: Recording) -> Path | None:
+        """A file that holds the clip, or None if it has to be streamed."""
+        local = await asyncio.to_thread(self._find_local, rec)
+        if local:
+            return local
+        cached = self.clip_path(rec.id)
+        if await asyncio.to_thread(cached.exists):
+            return cached
+        if self.keep_clips:
+            return await self.ensure_clip(rec)
+        return None
+
     async def ensure_clip(self, rec: Recording) -> Path:
         path = self.clip_path(rec.id)
         async with self._lock(rec.id):
@@ -164,14 +216,20 @@ class ClipStore:
                 return path
             async with self._download_slots:
                 await self.api.download(rec, path)
-            if not rec.exact:
-                duration = await self._probe_duration(path)
-                if duration:
-                    await self.load_durations()
-                    self._durations[rec.id] = duration
-                    rec.stop = rec.start + duration
-                    await self._save_durations()
+        await self._learn_duration(rec, path)
         return path
+
+    async def _learn_duration(self, rec: Recording, clip: Path) -> None:
+        if rec.exact or not self._settled(rec, time.time()):
+            return
+        await self.load_durations()
+        if rec.id in self._durations:
+            return
+        duration = await self._probe_duration(clip)
+        if duration:
+            self._durations[rec.id] = duration
+            rec.stop = rec.start + duration
+            await self._save_durations()
 
     async def _run_ffmpeg(self, *args: str) -> tuple[int, str]:
         try:
@@ -200,22 +258,35 @@ class ClipStore:
         thumb = self.thumb_path(rec.id)
         if await asyncio.to_thread(thumb.exists):
             return thumb
-        clip = await self.ensure_clip(rec)
-        async with self._lock(rec.id):
+        async with self._thumb_locks.setdefault(rec.id, asyncio.Lock()):
             if await asyncio.to_thread(thumb.exists):
                 return thumb
-            first = f"{min(1.0, rec.duration / 2):.2f}" if rec.duration else "1"
-            for offset in (first, "0"):
-                code, err = await self._run_ffmpeg(
-                    "-loglevel", "error", "-y", "-ss", offset, "-i", str(clip),
-                    "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", str(thumb),
-                )
-                if code == -1:
-                    return None
-                if code == 0 and await asyncio.to_thread(thumb.exists):
-                    return thumb
-            _LOGGER.debug("Thumbnail for %s failed: %s", rec.id, err)
-        return None
+            source = await self.clip_source(rec)
+            temp: Path | None = None
+            if source is None:
+                temp = self._tmp / f"{rec.id}.mp4"
+                async with self._download_slots:
+                    await self.api.download(rec, temp)
+                source = temp
+            try:
+                await self._learn_duration(rec, source)
+                await asyncio.to_thread(self.root.mkdir, parents=True, exist_ok=True)
+                first = f"{min(1.0, rec.duration / 2):.2f}" if rec.duration else "1"
+                err = ""
+                for offset in (first, "0"):
+                    code, err = await self._run_ffmpeg(
+                        "-loglevel", "error", "-y", "-ss", offset, "-i", str(source),
+                        "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", str(thumb),
+                    )
+                    if code == -1:
+                        return None
+                    if code == 0 and await asyncio.to_thread(thumb.exists):
+                        return thumb
+                _LOGGER.debug("Thumbnail for %s failed: %s", rec.id, err)
+                return None
+            finally:
+                if temp is not None:
+                    await asyncio.to_thread(temp.unlink, True)
 
     def _ffmpeg(self) -> str:
         try:
@@ -249,7 +320,7 @@ class ClipStore:
                 continue
             if await asyncio.to_thread(self.thumb_path(rec.id).exists):
                 continue
-            if await asyncio.to_thread(self._size) > max_bytes:
+            if self.keep_clips and await asyncio.to_thread(self._size) > max_bytes:
                 break
             try:
                 if await self.ensure_thumb(rec) is None:
@@ -258,7 +329,7 @@ class ClipStore:
                 self._failed.add(rec.id)
                 _LOGGER.debug("Prefetch of %s failed: %s", rec.id, err)
             except OSError as err:
-                _LOGGER.warning("Could not write clip cache: %s", err)
+                _LOGGER.warning("Could not write thumbnail cache: %s", err)
                 return
             except Exception:
                 _LOGGER.exception("Unexpected error while caching recording %s", rec.id)
@@ -270,12 +341,16 @@ class ClipStore:
         return sum(p.stat().st_size for p in self.root.iterdir() if p.is_file())
 
     def _cleanup(self, recordings: list[Recording], max_bytes: int) -> set[int]:
-        """Remove stale files and clips that were fetched while still recording."""
+        """Remove stale files, and clips that are not wanted or were fetched too early."""
         if not self.root.exists():
             return set()
         by_id = {rec.id: rec for rec in recordings}
         now = time.time()
         dropped: set[int] = set()
+        if self._tmp.exists():
+            for path in self._tmp.iterdir():
+                if now - path.stat().st_mtime > 3600:
+                    path.unlink(missing_ok=True)
         files = []
         for path in self.root.iterdir():
             if not path.is_file() or path.name == "durations.json":
@@ -291,16 +366,19 @@ class ClipStore:
                 if stem.isdigit():
                     dropped.add(int(stem))
                 continue
-            if path.suffix == ".mp4" and self._settled(rec, now):
-                fetched = path.stat().st_mtime
-                complete_after = (
-                    rec.stop + 30 if rec.exact else rec.start + OPEN_ENDED_SECONDS
-                )
-                if fetched < complete_after:
+            if path.suffix == ".mp4":
+                if not self.keep_clips:
                     path.unlink(missing_ok=True)
-                    self.thumb_path(rec.id).unlink(missing_ok=True)
-                    dropped.add(rec.id)
                     continue
+                if self._settled(rec, now):
+                    complete_after = (
+                        rec.stop + 30 if rec.exact else rec.start + OPEN_ENDED_SECONDS
+                    )
+                    if path.stat().st_mtime < complete_after:
+                        path.unlink(missing_ok=True)
+                        self.thumb_path(rec.id).unlink(missing_ok=True)
+                        dropped.add(rec.id)
+                        continue
             files.append(path)
         files = [p for p in files if p.exists()]
         total = sum(p.stat().st_size for p in files)

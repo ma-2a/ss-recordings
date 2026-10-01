@@ -8,10 +8,10 @@ The built-in Synology DSM integration only exposes live streams. Event lists and
 
 ## Features
 
-- **Morning review card**: all clips since a time of your choice (default 20:00 the previous evening), grouped by day, newest marked as unseen.
+- **Morning review card**: shows last night's clips by default (20:00–07:00, adjustable), with a switch to show all recordings. Unseen clips are marked.
 - **Glass look**: translucent, blurred card that picks up the colors of your theme, in light and dark.
 - **Play all**: plays unseen clips back to back, at 1×, 2× or 4× speed.
-- **Fast**: new clips are downloaded in the background and cached locally, so playback starts instantly.
+- **No duplicate storage**: clips are streamed from Surveillance Station when you play them. Only small thumbnails are kept. If Home Assistant runs on the NAS, it can read the recordings straight from disk.
 - **Works everywhere**: clips are served by Home Assistant itself through signed URLs, so they play in the browser, the companion app and over your VPN without exposing DSM.
 - **Per-camera sensors**: number of recordings in the last 24 hours plus details of the latest one.
 - **Automation event**: `ss_recordings_new_recording` fires for every new clip.
@@ -66,28 +66,32 @@ The card is registered automatically. Add it to any dashboard:
 type: custom:ss-recordings-card
 ```
 
-After updating the integration, reload the browser once so the new card version is used.
+All main settings are available in the visual card editor. After updating the integration, reload the browser once so the new card version is used.
 
 #### Card options
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `title` | "Last night" | Card title |
-| `since` | `"20:00"` | Show clips since the most recent occurrence of this time |
-| `hours` | – | Alternative to `since`: show the last N hours |
+| `default_view` | `night` | What the card shows when it opens: `night` or `all` |
+| `night_start` | `"20:00"` | Start of the night window |
+| `night_end` | `"07:00"` | End of the night window |
+| `show_toggle` | `true` | Show the Night / All switch |
+| `title` | "Last night" | Title of the night view |
 | `cameras` | all | List of camera names, e.g. `[Front door]` |
 | `order` | `oldest` | `oldest` or `newest` first |
 | `speed` | `1` | Initial playback speed |
 | `autoplay_next` | `true` | Continue with the next clip when one ends |
 | `variant` | `glass` | `glass` for the translucent look, `plain` for a normal Home Assistant card |
 
+The night view shows the most recent night: in the morning that is last night from start to end, during the evening it is the night in progress. "All" shows every recording within the integration's time window (48 h by default).
+
 ```yaml
 type: custom:ss-recordings-card
-title: Last night
-since: "21:00"
+default_view: night
+night_start: "22:00"
+night_end: "06:30"
 cameras:
   - Front door
-order: oldest
 speed: 2
 ```
 
@@ -115,11 +119,24 @@ Settings → Devices & services → Surveillance Station Recordings → **Config
 
 | Option | Default | Description |
 | --- | --- | --- |
-| Keep recordings from the last | 48 h | Window of recordings loaded from Surveillance Station. The card can't look further back than this. |
-| Local clip cache size | 2000 MB | Clips are cached in `config/ss_recordings/`. Oldest clips are removed first. |
-| Download new clips in the background | on | Pre-downloads clips and thumbnails so the card is instant. |
+| Keep recordings from the last | 48 h | Window of recordings loaded from Surveillance Station. The "All" view can't look further back than this. |
+| Create thumbnails in the background | on | Small JPEG previews, stored in `config/ss_recordings/`. |
+| Keep full clips on disk | off | Off: clips are streamed when played and nothing is stored. On: clips are cached for instant replay. |
+| Local cache size | 2000 MB | Upper limit when full clips are kept. Oldest clips are removed first. |
+| Surveillance folder inside the container | – | Read clips directly from disk instead of through the API, see below. |
 
-Recording deletion and retention are still handled by Surveillance Station. The cache only holds copies.
+Recording deletion and retention are still handled by Surveillance Station.
+
+### Reading recordings directly from disk
+
+If Home Assistant runs as a container on the same Synology, it can read the recording files directly. Nothing is downloaded or copied, and seeking is instant.
+
+1. Container Manager → your Home Assistant container → **Stop** → **Edit** → **Volume Settings** → **Add Folder**
+2. Choose the shared folder `surveillance`, mount path `/surveillance`, and tick **Read-only**
+3. Save and start the container
+4. Integration options → **Surveillance folder inside the container**: `/surveillance`
+
+If you use `docker compose`, add `- /volume1/surveillance:/surveillance:ro` to the volumes of the Home Assistant service.
 
 ## Automations
 
@@ -155,7 +172,7 @@ Event data: `id`, `camera_id`, `camera_name`, `start`, `stop`, `duration`, `reas
 
 ## How it works
 
-The integration logs into DSM with a dedicated Surveillance Station session, polls `SYNO.SurveillanceStation.Recording` every minute and downloads clips via the same API. Home Assistant serves them from `/api/ss_recordings/...` behind its own authentication. The card talks to the integration over the websocket API.
+The integration logs into DSM with a dedicated Surveillance Station session, polls `SYNO.SurveillanceStation.Recording` every minute and streams clips via the same API (or reads them from the mounted surveillance folder). Home Assistant serves them from `/api/ss_recordings/...` behind its own authentication. The card talks to the integration over the websocket API.
 
 ## Troubleshooting
 

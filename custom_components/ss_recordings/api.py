@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import logging
-from pathlib import Path
 import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -51,6 +51,7 @@ class Recording:
     reason: str | None
     size: int | None
     exact: bool = True
+    file_path: str | None = None
 
     @property
     def duration(self) -> int:
@@ -133,6 +134,7 @@ class SurveillanceApi:
         self._apis: dict[str, dict[str, Any]] = {}
         self._login_lock = asyncio.Lock()
         self.last_list_info: dict[str, Any] = {}
+        self._working_variant: dict[str, Any] | None = None
 
     async def _raw(
         self, path: str, params: dict[str, Any], timeout: float = 30
@@ -346,64 +348,78 @@ class SurveillanceApi:
             reason=reason,
             size=int(size) if str(size or "").isdigit() else None,
             exact=exact,
+            file_path=_first(item, "filePath", "path"),
         )
+
+    def _download_variants(self, rec: Recording) -> list[dict[str, Any]]:
+        if rec.exact:
+            return [{"offsetTimeMs": 0, "playTimeMs": rec.duration * 1000 + 1000}]
+        variants = [{}, {"offsetTimeMs": 0, "playTimeMs": 3_600_000}]
+        if self._working_variant in variants:
+            variants.remove(self._working_variant)
+            variants.insert(0, self._working_variant)
+        return variants
+
+    async def open_download(
+        self, rec: Recording, headers: dict[str, str] | None = None
+    ) -> aiohttp.ClientResponse:
+        """Start a download and return the open response. The caller must release it."""
+        last: SurveillanceError | None = None
+        for extra in self._download_variants(rec):
+            for attempt in range(2):
+                if self._sid is None:
+                    await self.login()
+                path, max_version = self._api(API_RECORDING)
+                params = {
+                    "api": API_RECORDING,
+                    "method": "Download",
+                    "version": max_version,
+                    "id": rec.id,
+                    "mountId": rec.mount_id,
+                    **extra,
+                    "_sid": self._sid,
+                }
+                try:
+                    resp = await self._session.get(
+                        self._base + path,
+                        params={k: str(v) for k, v in params.items() if v is not None},
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=60),
+                    )
+                except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+                    raise SurveillanceConnectionError(str(err)) from err
+                if resp.status >= 400:
+                    resp.release()
+                    raise SurveillanceError(f"Download of {rec.id} failed (HTTP {resp.status})")
+                if "json" in resp.content_type or "text" in resp.content_type:
+                    data = await resp.json(content_type=None)
+                    resp.release()
+                    code = data.get("error", {}).get("code")
+                    if code in SESSION_ERRORS and attempt == 0:
+                        self._sid = None
+                        continue
+                    last = SurveillanceError(f"Download of {rec.id} failed ({code})", code)
+                    break
+                if not rec.exact:
+                    self._working_variant = extra
+                return resp
+        raise last or SurveillanceError(f"Download of {rec.id} failed")
 
     async def download(self, rec: Recording, target: Path) -> None:
         """Write the recording as MP4 to target (via a .part file)."""
-        if rec.exact:
-            variants = [{"offsetTimeMs": 0, "playTimeMs": rec.duration * 1000 + 1000}]
-        else:
-            variants = [{}, {"offsetTimeMs": 0, "playTimeMs": 3_600_000}]
-        last: SurveillanceError | None = None
-        for extra in variants:
-            try:
-                await self._download(rec, target, extra)
-                return
-            except SurveillanceConnectionError:
-                raise
-            except SurveillanceError as err:
-                last = err
-        raise last or SurveillanceError(f"Download of {rec.id} failed")
-
-    async def _download(self, rec: Recording, target: Path, extra: dict[str, Any]) -> None:
         part = target.with_suffix(".part")
-        for attempt in range(2):
-            if self._sid is None:
-                await self.login()
-            path, max_version = self._api(API_RECORDING)
-            params = {
-                "api": API_RECORDING,
-                "method": "Download",
-                "version": max_version,
-                "id": rec.id,
-                "mountId": rec.mount_id,
-                **extra,
-                "_sid": self._sid,
-            }
+        resp = await self.open_download(rec)
+        try:
+            await asyncio.to_thread(part.parent.mkdir, parents=True, exist_ok=True)
+            fh = await asyncio.to_thread(part.open, "wb")
             try:
-                async with self._session.get(
-                    self._base + path,
-                    params={k: str(v) for k, v in params.items() if v is not None},
-                    timeout=aiohttp.ClientTimeout(total=600, sock_read=60),
-                ) as resp:
-                    resp.raise_for_status()
-                    if "json" in resp.content_type or "text" in resp.content_type:
-                        data = await resp.json(content_type=None)
-                        code = data.get("error", {}).get("code")
-                        if code in SESSION_ERRORS and attempt == 0:
-                            self._sid = None
-                            continue
-                        raise SurveillanceError(f"Download of {rec.id} failed ({code})", code)
-                    await asyncio.to_thread(part.parent.mkdir, parents=True, exist_ok=True)
-                    fh = await asyncio.to_thread(part.open, "wb")
-                    try:
-                        async for chunk in resp.content.iter_chunked(1 << 16):
-                            await asyncio.to_thread(fh.write, chunk)
-                    finally:
-                        await asyncio.to_thread(fh.close)
-                await asyncio.to_thread(part.replace, target)
-                return
-            except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-                await asyncio.to_thread(part.unlink, True)
-                raise SurveillanceConnectionError(str(err)) from err
-        raise SurveillanceError(f"Download of {rec.id} failed")
+                async for chunk in resp.content.iter_chunked(1 << 16):
+                    await asyncio.to_thread(fh.write, chunk)
+            finally:
+                await asyncio.to_thread(fh.close)
+            await asyncio.to_thread(part.replace, target)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            await asyncio.to_thread(part.unlink, True)
+            raise SurveillanceConnectionError(str(err)) from err
+        finally:
+            resp.release()

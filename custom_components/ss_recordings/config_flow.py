@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -26,6 +26,7 @@ from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    TextSelector,
 )
 
 from .api import (
@@ -36,10 +37,13 @@ from .api import (
 )
 from .const import (
     CONF_CACHE_MB,
+    CONF_KEEP_CLIPS,
     CONF_LOOKBACK_HOURS,
     CONF_PREFETCH,
+    CONF_RECORDINGS_PATH,
     CONF_VERIFY_SSL,
     DEFAULT_CACHE_MB,
+    DEFAULT_KEEP_CLIPS,
     DEFAULT_LOOKBACK_HOURS,
     DEFAULT_PORT,
     DEFAULT_PREFETCH,
@@ -149,9 +153,15 @@ class SSRecordingsOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
-        options = self.config_entry.options
+            path = (user_input.get(CONF_RECORDINGS_PATH) or "").strip()
+            user_input[CONF_RECORDINGS_PATH] = path
+            if path and not await self.hass.async_add_executor_job(os.path.isdir, path):
+                errors[CONF_RECORDINGS_PATH] = "path_not_found"
+            else:
+                return self.async_create_entry(data=user_input)
+        options = {**self.config_entry.options, **(user_input or {})}
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -184,6 +194,15 @@ class SSRecordingsOptionsFlow(OptionsFlow):
                         CONF_PREFETCH,
                         default=options.get(CONF_PREFETCH, DEFAULT_PREFETCH),
                     ): bool,
+                    vol.Required(
+                        CONF_KEEP_CLIPS,
+                        default=options.get(CONF_KEEP_CLIPS, DEFAULT_KEEP_CLIPS),
+                    ): bool,
+                    vol.Optional(
+                        CONF_RECORDINGS_PATH,
+                        description={"suggested_value": options.get(CONF_RECORDINGS_PATH, "")},
+                    ): TextSelector(),
                 }
             ),
+            errors=errors,
         )

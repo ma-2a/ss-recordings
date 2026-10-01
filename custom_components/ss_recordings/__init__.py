@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
-from pathlib import Path
 import shutil
 import time
+from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
-from aiohttp import web
 import voluptuous as vol
-
+from aiohttp import web
 from homeassistant.components import websocket_api
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import HomeAssistantView, StaticPathConfig
@@ -27,8 +26,8 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.http import KEY_HASS
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.helpers.http import KEY_HASS
 from homeassistant.helpers.typing import ConfigType
 
 from .api import SurveillanceApi, SurveillanceError
@@ -151,6 +150,9 @@ def ws_recordings(
             "recordings": items,
             "cameras": sorted(cameras),
             "configured": bool(entries),
+            "lookback_hours": max(
+                (e.runtime_data.lookback_hours for e in entries), default=None
+            ),
         },
     )
 
@@ -175,12 +177,35 @@ class ClipView(_RecordingView):
     async def get(self, request: web.Request, entry_id: str, rec_id: str) -> web.StreamResponse:
         coordinator, rec = self._lookup(request, entry_id, rec_id)
         try:
-            path = await coordinator.store.ensure_clip(rec)
+            path = await coordinator.store.clip_source(rec)
         except SurveillanceError as err:
             raise web.HTTPBadGateway(text=str(err)) from err
-        return web.FileResponse(
-            path, headers={"Content-Type": "video/mp4", "Cache-Control": "private, max-age=86400"}
-        )
+        if path is not None:
+            return web.FileResponse(
+                path, headers={"Content-Type": "video/mp4", "Cache-Control": "private, max-age=86400"}
+            )
+        return await self._stream(request, coordinator, rec)
+
+    async def _stream(self, request: web.Request, coordinator, rec) -> web.StreamResponse:
+        headers = {"Range": request.headers["Range"]} if "Range" in request.headers else None
+        try:
+            upstream = await coordinator.api.open_download(rec, headers)
+        except SurveillanceError as err:
+            raise web.HTTPBadGateway(text=str(err)) from err
+        try:
+            response = web.StreamResponse(status=206 if upstream.status == 206 else 200)
+            response.content_type = "video/mp4"
+            for name in ("Content-Length", "Content-Range", "Accept-Ranges"):
+                if name in upstream.headers:
+                    response.headers[name] = upstream.headers[name]
+            response.headers["Cache-Control"] = "private, no-store"
+            await response.prepare(request)
+            async for chunk in upstream.content.iter_chunked(1 << 16):
+                await response.write(chunk)
+            await response.write_eof()
+            return response
+        finally:
+            upstream.release()
 
 
 class ThumbView(_RecordingView):

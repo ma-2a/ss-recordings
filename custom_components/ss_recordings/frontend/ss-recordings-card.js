@@ -1,4 +1,4 @@
-const CARD_VERSION = "0.2.2";
+const CARD_VERSION = "0.3.0";
 
 const STRINGS = {
   en: {
@@ -11,6 +11,27 @@ const STRINGS = {
     newOnes: (n) => `${n} new`,
     markSeen: "Mark all as seen",
     error: "Could not load recordings",
+    allTitle: "All recordings",
+    night: "Night",
+    all: "All",
+    tonight: "Tonight",
+    last: (h) => `last ${h} h`,
+    form: {
+      title: "Title",
+      default_view: "Show by default",
+      night_start: "Night starts",
+      night_end: "Night ends",
+      show_toggle: "Show Night / All switch",
+      order: "Order",
+      variant: "Style",
+      speed: "Playback speed",
+      opt_night: "Night",
+      opt_all: "All recordings",
+      opt_oldest: "Oldest first",
+      opt_newest: "Newest first",
+      opt_glass: "Glass",
+      opt_plain: "Plain",
+    },
   },
   de: {
     title: "Letzte Nacht",
@@ -22,6 +43,27 @@ const STRINGS = {
     newOnes: (n) => `${n} neu`,
     markSeen: "Alle als gesehen markieren",
     error: "Aufnahmen konnten nicht geladen werden",
+    allTitle: "Alle Aufnahmen",
+    night: "Nacht",
+    all: "Alle",
+    tonight: "Heute Nacht",
+    last: (h) => `letzte ${h} h`,
+    form: {
+      title: "Titel",
+      default_view: "Standardmäßig anzeigen",
+      night_start: "Nacht beginnt",
+      night_end: "Nacht endet",
+      show_toggle: "Umschalter Nacht / Alle anzeigen",
+      order: "Reihenfolge",
+      variant: "Stil",
+      speed: "Abspielgeschwindigkeit",
+      opt_night: "Nacht",
+      opt_all: "Alle Aufnahmen",
+      opt_oldest: "Älteste zuerst",
+      opt_newest: "Neueste zuerst",
+      opt_glass: "Glas",
+      opt_plain: "Schlicht",
+    },
   },
 };
 
@@ -44,15 +86,30 @@ function saveSeen(seen) {
   }
 }
 
-function sinceTimestamp(config, now = new Date()) {
-  if (config.hours) {
-    return Math.floor(now.getTime() / 1000 - Number(config.hours) * 3600);
-  }
-  const [h, m] = String(config.since || "20:00").split(":").map(Number);
+function parseTime(value, fallback) {
+  const [h, m] = String(value || fallback).split(":").map(Number);
+  return [Number.isFinite(h) ? h : 0, Number.isFinite(m) ? m : 0];
+}
+
+function nightWindow(config, now = new Date()) {
+  const [sh, sm] = parseTime(config.night_start, "20:00");
+  const [eh, em] = parseTime(config.night_end, "07:00");
   const start = new Date(now);
-  start.setHours(h || 0, m || 0, 0, 0);
+  start.setHours(sh, sm, 0, 0);
   if (start > now) start.setDate(start.getDate() - 1);
-  return Math.floor(start.getTime() / 1000);
+  const end = new Date(start);
+  end.setHours(eh, em, 0, 0);
+  if (end <= start) end.setDate(end.getDate() + 1);
+  return {
+    since: Math.floor(start.getTime() / 1000),
+    until: Math.floor(Math.min(end.getTime(), now.getTime()) / 1000),
+    running: end > now,
+  };
+}
+
+function langOf(hass) {
+  const lang = (hass?.language || document.documentElement.lang || navigator.language || "en").split("-")[0];
+  return STRINGS[lang] ? lang : "en";
 }
 
 function fmtDuration(s) {
@@ -63,11 +120,51 @@ function fmtDuration(s) {
 
 class SSRecordingsCard extends HTMLElement {
   static getStubConfig() {
-    return { since: "20:00" };
+    return { default_view: "night", night_start: "20:00", night_end: "07:00" };
+  }
+
+  static getConfigForm() {
+    const t = STRINGS[langOf(document.querySelector("home-assistant")?.hass)].form;
+    const select = (options) => ({
+      select: { mode: "dropdown", options: options.map(([value, label]) => ({ value, label })) },
+    });
+    return {
+      schema: [
+        { name: "title", selector: { text: {} } },
+        { name: "default_view", selector: select([["night", t.opt_night], ["all", t.opt_all]]) },
+        {
+          type: "grid",
+          name: "",
+          schema: [
+            { name: "night_start", selector: { time: {} } },
+            { name: "night_end", selector: { time: {} } },
+          ],
+        },
+        { name: "show_toggle", selector: { boolean: {} } },
+        {
+          type: "grid",
+          name: "",
+          schema: [
+            { name: "order", selector: select([["oldest", t.opt_oldest], ["newest", t.opt_newest]]) },
+            { name: "variant", selector: select([["glass", t.opt_glass], ["plain", t.opt_plain]]) },
+          ],
+        },
+      ],
+      computeLabel: (schema) => t[schema.name] || schema.name,
+    };
   }
 
   setConfig(config) {
-    this._config = { since: "20:00", speed: 1, autoplay_next: true, ...config };
+    this._config = {
+      default_view: "night",
+      night_start: "20:00",
+      night_end: "07:00",
+      show_toggle: true,
+      speed: 1,
+      autoplay_next: true,
+      ...config,
+    };
+    this._view = this._config.default_view === "all" ? "all" : "night";
     this._speed = Number(this._config.speed) || 1;
     if (!this.shadowRoot) {
       this.attachShadow({ mode: "open" });
@@ -101,19 +198,27 @@ class SSRecordingsCard extends HTMLElement {
   }
 
   get _t() {
-    const lang = (this._hass?.language || "en").split("-")[0];
-    return STRINGS[lang] || STRINGS.en;
+    return STRINGS[langOf(this._hass)];
+  }
+
+  _window() {
+    if (this._view === "all") {
+      return { since: 0, until: Math.floor(Date.now() / 1000), running: true };
+    }
+    return nightWindow(this._config);
   }
 
   async _load() {
     if (!this._hass || this._loading) return;
     this._loading = true;
     try {
-      const msg = { type: "ss_recordings/recordings", since: sinceTimestamp(this._config) };
+      const win = this._window();
+      const msg = { type: "ss_recordings/recordings", since: win.since, until: win.until };
       if (this._config.cameras?.length) msg.cameras = this._config.cameras;
       if (this._config.entry_id) msg.entry_id = this._config.entry_id;
       const res = await this._hass.callWS(msg);
       this._configured = res.configured;
+      this._lookback = res.lookback_hours;
       const newest = this._config.order === "newest";
       const now = Date.now();
       this._urls = this._urls || new Map();
@@ -167,19 +272,41 @@ class SSRecordingsCard extends HTMLElement {
     const items = this._items || [];
     const seen = loadSeen();
     const unseen = items.filter((r) => !seen.has(this._key(r))).length;
-    const since = sinceTimestamp(this._config);
-    const summary = items.length
-      ? `${t.recordings(items.length)} · ${t.since} ${this._time(since, true)}${unseen ? ` · <span class="new">${t.newOnes(unseen)}</span>` : ""}`
-      : `${t.since} ${this._time(since, true)}`;
+    const parts = [];
+    if (items.length) parts.push(t.recordings(items.length));
+    if (this._view === "all") {
+      if (this._lookback) parts.push(t.last(this._lookback));
+    } else {
+      const win = this._window();
+      const range = `${this._time(win.since, true)} – ${win.running ? "" : this._time(win.until)}`.trim();
+      parts.push(win.running ? `${t.since} ${this._time(win.since, true)}` : range);
+    }
+    if (unseen) parts.push(`<span class="new">${t.newOnes(unseen)}</span>`);
+    const title = this._view === "all"
+      ? t.allTitle
+      : this._config.title || (this._window().running && this._isEvening() ? t.tonight : t.title);
+    const toggle = this._config.show_toggle === false ? "" : `
+      <div class="seg" role="tablist">
+        <button class="${this._view === "night" ? "on" : ""}" data-act="view-night">${t.night}</button>
+        <button class="${this._view === "all" ? "on" : ""}" data-act="view-all">${t.all}</button>
+      </div>`;
     this.shadowRoot.querySelector(".head").innerHTML = `
-      <div>
-        <div class="title">${this._esc(this._config.title || t.title)}</div>
-        <div class="sub">${summary}</div>
+      <div class="head-text">
+        <div class="title">${this._esc(title)}</div>
+        <div class="sub">${parts.join(" · ")}</div>
       </div>
       <div class="actions">
+        ${toggle}
         ${unseen ? `<button class="icon" data-act="seen" title="${t.markSeen}"><ha-icon icon="mdi:check-all"></ha-icon></button>` : ""}
         ${items.length ? `<button class="play" data-act="all"><ha-icon icon="mdi:play"></ha-icon>${t.playAll}</button>` : ""}
       </div>`;
+  }
+
+  _isEvening() {
+    const [sh] = parseTime(this._config.night_start, "20:00");
+    const [eh] = parseTime(this._config.night_end, "07:00");
+    const h = new Date().getHours();
+    return sh > eh ? h >= sh : false;
   }
 
   _renderBody(force = false) {
@@ -304,6 +431,14 @@ class SSRecordingsCard extends HTMLElement {
       if (video) video.playbackRate = this._speed;
       const btn = this.shadowRoot.querySelector(".speed");
       if (btn) btn.textContent = `${this._speed}×`;
+    } else if (act === "view-night" || act === "view-all") {
+      const view = act === "view-all" ? "all" : "night";
+      if (view === this._view) return;
+      this._view = view;
+      this._items = null;
+      this._lastBody = null;
+      this._render();
+      this._load();
     } else if (act === "seen") {
       const seen = loadSeen();
       this._items.forEach((r) => seen.add(this._key(r)));
@@ -351,7 +486,15 @@ const STYLE = `
   .title { font-size: 1.15em; font-weight: 500; letter-spacing: .01em; color: var(--primary-text-color); }
   .sub { font-size: .85em; color: var(--secondary-text-color); margin-top: 3px; }
   .sub .new { color: var(--ss-accent); font-weight: 500; }
-  .actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+  .actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+  .head-text { min-width: 0; }
+  .seg { display: inline-flex; padding: 3px; border-radius: 999px; background: rgba(140, 140, 140, .16);
+    background: color-mix(in srgb, var(--primary-text-color) 8%, transparent); }
+  .seg button { padding: 5px 12px; border-radius: 999px; font-size: .85em; font-weight: 500;
+    color: var(--secondary-text-color); transition: background .15s ease, color .15s ease; }
+  .seg button.on { background: var(--card-background-color, #fff); color: var(--primary-text-color);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .18); }
+  .glass .seg button.on { background: color-mix(in srgb, var(--ss-tint) 85%, transparent); }
   button { font: inherit; cursor: pointer; border: none; background: none; color: inherit; }
   .play {
     display: flex; align-items: center; gap: 4px; padding: 7px 14px 7px 9px; border-radius: 999px;

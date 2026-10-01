@@ -41,15 +41,22 @@
       "init": {
         "title": "Aufnahmen",
         "data": {
-          "lookback_hours": "Aufnahmen der letzten … anzeigen",
-          "cache_mb": "Größe des lokalen Clip-Caches",
-          "prefetch": "Neue Clips im Hintergrund laden"
+          "lookback_hours": "Aufnahmen der letzten … laden",
+          "cache_mb": "Größe des lokalen Speichers",
+          "prefetch": "Vorschaubilder im Hintergrund erstellen",
+          "keep_clips": "Komplette Clips speichern",
+          "recordings_path": "Surveillance-Ordner im Container (optional)"
         },
         "data_description": {
           "lookback_hours": "Nur Aufnahmen in diesem Zeitraum erscheinen in der Karte.",
-          "prefetch": "Damit startet der Morgen-Rückblick sofort. Die Clips liegen im Home-Assistant-Konfigordner unter ss_recordings."
+          "prefetch": "Vorschaubilder sind kleine JPEG-Dateien im Home-Assistant-Konfigordner unter ss_recordings.",
+          "keep_clips": "Aus: Clips werden beim Abspielen direkt aus Surveillance Station gestreamt, gespeichert wird nichts. An: Clips werden für sofortiges Abspielen bis zur Speichergröße aufbewahrt.",
+          "recordings_path": "Läuft Home Assistant auf der NAS, den freigegebenen Ordner surveillance in den Container einbinden (z. B. als /surveillance) und den Pfad hier eintragen. Clips werden dann direkt von der Platte gelesen."
         }
       }
+    },
+    "error": {
+      "path_not_found": "Diesen Ordner gibt es im Home-Assistant-Container nicht."
     }
   },
   "entity": {

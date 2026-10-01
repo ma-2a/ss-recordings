@@ -42,14 +42,21 @@
         "title": "Recordings",
         "data": {
           "lookback_hours": "Keep recordings from the last",
-          "cache_mb": "Local clip cache size",
-          "prefetch": "Download new clips in the background"
+          "cache_mb": "Local cache size",
+          "prefetch": "Create thumbnails in the background",
+          "keep_clips": "Keep full clips on disk",
+          "recordings_path": "Surveillance folder inside the container (optional)"
         },
         "data_description": {
           "lookback_hours": "Only recordings in this window are listed in the card.",
-          "prefetch": "Makes the morning review instant. Clips are stored in the Home Assistant config folder under ss_recordings."
+          "prefetch": "Thumbnails are small JPEG files in the Home Assistant config folder under ss_recordings.",
+          "keep_clips": "Off: clips are streamed from Surveillance Station when you play them and nothing is stored. On: clips are kept for instant replay, up to the cache size.",
+          "recordings_path": "If Home Assistant runs on the NAS, mount the surveillance shared folder into the container (e.g. /surveillance) and enter the path here. Clips are then read directly from disk."
         }
       }
+    },
+    "error": {
+      "path_not_found": "This folder does not exist inside the Home Assistant container."
     }
   },
   "entity": {
