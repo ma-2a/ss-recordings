@@ -164,6 +164,8 @@ The integration logs into DSM with a dedicated Surveillance Station session, pol
 - **No thumbnails**: `ffmpeg` is missing. Playback still works.
 - **Clip does not play in the browser**: the browser can't decode the camera's codec. H.264 works everywhere. H.265 plays in Safari and in some Chromium builds. Switch the camera's stream to H.264 if needed.
 
+- **Card shows no recordings although Surveillance Station has some**: check that the DSM user may play back the camera in Surveillance Station's privilege settings. Then open the integration, use the three-dot menu → **Download diagnostics** and attach the file to an issue. It contains the raw answer from Surveillance Station (host, user and paths are removed).
+
 Enable debug logging:
 
 ```yaml

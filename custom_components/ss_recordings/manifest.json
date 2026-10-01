@@ -3,12 +3,12 @@
   "name": "Surveillance Station Recordings",
   "codeowners": ["@ma-2a"],
   "config_flow": true,
-  "dependencies": ["http", "frontend", "websocket_api"],
+  "dependencies": ["http", "frontend", "websocket_api", "diagnostics"],
   "after_dependencies": ["ffmpeg"],
   "documentation": "https://github.com/ma-2a/ss-recordings",
   "integration_type": "hub",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/ma-2a/ss-recordings/issues",
   "requirements": [],
-  "version": "0.2.0"
+  "version": "0.2.1"
 }

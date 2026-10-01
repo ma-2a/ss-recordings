@@ -120,6 +120,7 @@ class SurveillanceApi:
         self._sid: str | None = None
         self._apis: dict[str, dict[str, Any]] = {}
         self._login_lock = asyncio.Lock()
+        self.last_list_info: dict[str, Any] = {}
 
     async def _raw(
         self, path: str, params: dict[str, Any], timeout: float = 30
@@ -152,6 +153,13 @@ class SurveillanceApi:
             raise SurveillanceError(
                 "Surveillance Station API not found. Is the package installed and running?"
             )
+
+    def api_versions(self) -> dict[str, Any]:
+        return {
+            name: {k: info.get(k) for k in ("path", "minVersion", "maxVersion")}
+            for name, info in self._apis.items()
+            if name in (API_AUTH, API_CAMERA, API_RECORDING)
+        }
 
     def _api(self, name: str) -> tuple[str, int]:
         info = self._apis.get(name)
@@ -240,30 +248,60 @@ class SurveillanceApi:
             )
         return result
 
+    async def list_raw(self, **params: Any) -> dict[str, Any]:
+        return await self._call(API_RECORDING, "List", **params)
+
+    @staticmethod
+    def _items(data: dict[str, Any]) -> list[dict[str, Any]]:
+        items = _first(data, "events", "recordings", "data") or []
+        return items if isinstance(items, list) else []
+
+    def _in_window(
+        self, items: list[dict[str, Any]], since: int, until: int, cameras: dict[int, str]
+    ) -> list[Recording]:
+        result = []
+        for item in items:
+            rec = self._parse(item, cameras)
+            if rec is not None and since <= rec.start <= until:
+                result.append(rec)
+        return result
+
     async def recordings(
         self, since: int, until: int, cameras: dict[int, str], limit: int = 500
     ) -> list[Recording]:
-        data = await self._call(
-            API_RECORDING,
-            "List",
-            offset=0,
-            limit=limit,
-            fromTime=since,
-            toTime=until,
-        )
-        items = _first(data, "recordings", "events", "data") or []
-        if not items and data.get("total", 0) == 0:
-            data = await self._call(API_RECORDING, "List", offset=0, limit=limit)
-            items = _first(data, "recordings", "events", "data") or []
+        data = await self.list_raw(offset=0, limit=limit, fromTime=since, toTime=until)
+        items = self._items(data)
+        found = self._in_window(items, since, until, cameras)
+        info: dict[str, Any] = {
+            "filtered_total": data.get("total"),
+            "filtered_items": len(items),
+            "filtered_in_window": len(found),
+        }
 
-        result: list[Recording] = []
-        for item in items:
-            rec = self._parse(item, cameras)
-            if rec is None or rec.start < since or rec.start > until:
-                continue
-            result.append(rec)
-        result.sort(key=lambda r: r.start)
-        return result
+        if not found:
+            seen: dict[int, Recording] = {}
+            scanned = 0
+            for page in range(8):
+                data = await self.list_raw(offset=page * limit, limit=limit)
+                items = self._items(data)
+                scanned += len(items)
+                for rec in self._in_window(items, since, until, cameras):
+                    seen[rec.id] = rec
+                if len(items) < limit:
+                    break
+            found = list(seen.values())
+            info.update(
+                unfiltered_total=data.get("total"),
+                unfiltered_scanned=scanned,
+                unfiltered_in_window=len(found),
+            )
+
+        if items:
+            info["sample_keys"] = sorted(items[0].keys())
+        self.last_list_info = info
+        _LOGGER.debug("Recording list: %s", info)
+        found.sort(key=lambda r: r.start)
+        return found
 
     @staticmethod
     def _parse(item: dict[str, Any], cameras: dict[int, str]) -> Recording | None:
