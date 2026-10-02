@@ -9,6 +9,7 @@ The built-in Synology DSM integration only exposes live streams. Event lists and
 ## Features
 
 - **Morning review card**: opens on last night (20:00–07:00, adjustable). Arrows step back through earlier nights, a switch shows all recordings.
+- **Summary line**: "4 events last night · between 22:14 and 05:44 · 3 not watched yet". Tap it to play them, dismiss it once checked.
 - **Play all**: plays unseen clips back to back, at 1×, 2× or 4× speed. Unseen clips are marked.
 - **Visual editor**: every setting of the card can be changed in the dashboard editor, no YAML needed.
 - **No duplicate storage**: clips are streamed from Surveillance Station when you play them. Only small thumbnails are kept. If Home Assistant runs on the NAS, it can read the recordings straight from disk.
@@ -78,7 +79,9 @@ Everything below can be set in the visual editor. After updating the integration
 - **Night** (default): before the night ends, the night in progress; afterwards, the night that just ended. With the default 20:00–07:00 you see last night at 7:30 in the morning and still at 22:00 in the evening. The arrows next to the title step to earlier nights.
 - **All**: every recording within the integration's time window (48 hours by default).
 
-Click a thumbnail to play it. **Play all** starts with the first unseen clip and continues automatically. "Seen" is stored per browser.
+Above the clips a summary line sums up the night, for example *4 events last night · between 22:14 and 05:44 · 3 not watched yet*. Tap it to jump to that night and play the unwatched clips. The × hides it until the next night. By default it only appears while there are unwatched clips; it can also be shown always, never, or only during a time window such as 06:00–12:00.
+
+Click a thumbnail to play it. **Play all** starts with the first unseen clip and continues automatically. "Seen" and dismissed summaries are stored per browser.
 
 #### Card options
 
@@ -88,6 +91,9 @@ Click a thumbnail to play it. **Play all** starts with the first unseen clip and
 | `night_start` | `"20:00"` | Start of the night |
 | `night_end` | `"07:00"` | End of the night |
 | `show_toggle` | `true` | Show the Night / All switch |
+| `summary` | `unseen` | Summary line: `unseen` (only with unwatched clips), `always` or `never` |
+| `summary_from` | – | Only show the summary line from this time, e.g. `"06:00"` |
+| `summary_until` | – | Only show the summary line until this time, e.g. `"12:00"` |
 | `cameras` | all | Only show these cameras, e.g. `[Front door]` |
 | `title` | automatic | Fixed title for the default night. Empty: "Last night", "Tonight" or the date |
 | `variant` | `glass` | `glass` or `plain` (normal Home Assistant card) |

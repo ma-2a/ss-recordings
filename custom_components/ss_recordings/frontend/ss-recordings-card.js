@@ -1,4 +1,4 @@
-const CARD_VERSION = "0.4.0";
+const CARD_VERSION = "0.5.0";
 
 const STRINGS = {
   en: {
@@ -21,6 +21,15 @@ const STRINGS = {
     older: "Earlier night",
     newer: "Later night",
     download: "Download",
+    events: (n) => (n === 1 ? "1 event" : `${n} events`),
+    sumLast: "last night",
+    sumTonight: "tonight so far",
+    sumNone: (label) => `No events ${label}`,
+    sumBetween: (a, b) => `between ${a} and ${b}`,
+    sumAt: (a) => `at ${a}`,
+    sumUnseen: (n) => `${n} not watched yet`,
+    sumAllSeen: "all watched",
+    dismiss: "Dismiss until the next night",
     form: {
       title: "Title",
       default_view: "Show by default",
@@ -51,6 +60,14 @@ const STRINGS = {
       show_download: "Show download button",
       h_title: "Leave empty for automatic titles like Last night or Tonight.",
       h_night: "Before the night ends the card shows the running night, afterwards the night that just ended.",
+      sec_summary: "Summary line",
+      summary: "Show summary line",
+      opt_sum_unseen: "Only when there are unwatched clips",
+      opt_sum_always: "Always",
+      opt_sum_never: "Never",
+      summary_from: "Visible from",
+      summary_until: "Visible until",
+      h_summary_window: "Leave both empty to show it all day.",
     },
   },
   de: {
@@ -73,6 +90,15 @@ const STRINGS = {
     older: "Frühere Nacht",
     newer: "Spätere Nacht",
     download: "Herunterladen",
+    events: (n) => (n === 1 ? "1 Ereignis" : `${n} Ereignisse`),
+    sumLast: "letzte Nacht",
+    sumTonight: "heute Nacht bisher",
+    sumNone: (label) => `Keine Ereignisse ${label}`,
+    sumBetween: (a, b) => `zwischen ${a} und ${b}`,
+    sumAt: (a) => `um ${a}`,
+    sumUnseen: (n) => `${n} noch nicht angesehen`,
+    sumAllSeen: "alle angesehen",
+    dismiss: "Bis zur nächsten Nacht ausblenden",
     form: {
       title: "Titel",
       default_view: "Standardmäßig anzeigen",
@@ -103,6 +129,14 @@ const STRINGS = {
       show_download: "Download-Button anzeigen",
       h_title: "Leer lassen für automatische Titel wie Letzte Nacht oder Heute Nacht.",
       h_night: "Bis zum Ende der Nacht zeigt die Karte die laufende Nacht, danach die gerade beendete.",
+      sec_summary: "Zusammenfassung",
+      summary: "Zusammenfassung anzeigen",
+      opt_sum_unseen: "Nur wenn es Ungesehenes gibt",
+      opt_sum_always: "Immer",
+      opt_sum_never: "Nie",
+      summary_from: "Sichtbar ab",
+      summary_until: "Sichtbar bis",
+      h_summary_window: "Beide leer lassen, um sie den ganzen Tag zu zeigen.",
     },
   },
 };
@@ -124,6 +158,34 @@ function saveSeen(seen) {
   } catch (e) {
     /* storage unavailable */
   }
+}
+
+const DISMISS_KEY = "ss-recordings-dismissed";
+
+function loadDismissed() {
+  try {
+    return JSON.parse(localStorage.getItem(DISMISS_KEY) || "[]");
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveDismissed(list) {
+  try {
+    localStorage.setItem(DISMISS_KEY, JSON.stringify(list.slice(-50)));
+  } catch (e) {
+    /* storage unavailable */
+  }
+}
+
+function inTimeWindow(from, until, now = new Date()) {
+  if (!from && !until) return true;
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  const [fh, fm] = parseTime(from, "00:00");
+  const [uh, um] = parseTime(until, "23:59");
+  const a = fh * 60 + fm;
+  const b = uh * 60 + um;
+  return a <= b ? minutes >= a && minutes <= b : minutes >= a || minutes <= b;
 }
 
 function parseTime(value, fallback) {
@@ -199,6 +261,7 @@ class SSRecordingsCard extends HTMLElement {
       night_start: "20:00",
       night_end: "07:00",
       show_toggle: true,
+      summary: "unseen",
       speed: 1,
       autoplay_next: true,
       ...config,
@@ -296,12 +359,94 @@ class SSRecordingsCard extends HTMLElement {
       });
       this._items = newest ? items.reverse() : items;
       this._error = null;
+      await this._loadSummary(win, this._items);
     } catch (err) {
       this._error = err?.message || String(err);
     } finally {
       this._loading = false;
     }
     this._render();
+    if (this._playAfterLoad) {
+      this._playAfterLoad = false;
+      if (this._items?.length) this._action("all");
+    }
+  }
+
+  _summaryNight() {
+    const nights = this._nights();
+    return nights[defaultNightIndex(this._config, nights)];
+  }
+
+  async _loadSummary(win, items) {
+    if (this._config.summary === "never" || this._config.summary === false) {
+      this._summary = null;
+      return;
+    }
+    const night = this._summaryNight();
+    if (!night) {
+      this._summary = null;
+      return;
+    }
+    let recordings = items;
+    if (this._view !== "night" || win.since !== night.since) {
+      const msg = { type: "ss_recordings/recordings", since: night.since, until: night.until };
+      if (this._config.cameras?.length) msg.cameras = this._config.cameras;
+      if (this._config.entry_id) msg.entry_id = this._config.entry_id;
+      try {
+        recordings = (await this._hass.callWS(msg)).recordings;
+      } catch (err) {
+        return;
+      }
+    }
+    this._summary = { night, recordings };
+  }
+
+  _summaryVisible() {
+    const mode = this._config.summary;
+    if (!this._summary || mode === "never" || mode === false) return false;
+    if (!inTimeWindow(this._config.summary_from, this._config.summary_until)) return false;
+    if (loadDismissed().includes(this._summary.night.since)) return false;
+    if (mode === "always" || mode === true) return true;
+    const seen = loadSeen();
+    return this._summary.recordings.some((r) => !seen.has(this._key(r)));
+  }
+
+  _renderSummary() {
+    const slot = this.shadowRoot.querySelector(".summary-slot");
+    if (!slot) return;
+    if (!this._summaryVisible()) {
+      slot.innerHTML = "";
+      return;
+    }
+    const t = this._t;
+    const { night, recordings } = this._summary;
+    const label = night.running ? t.sumTonight : t.sumLast;
+    const seen = loadSeen();
+    const unseen = recordings.filter((r) => !seen.has(this._key(r))).length;
+    let text;
+    const details = [];
+    if (!recordings.length) {
+      text = t.sumNone(label);
+    } else {
+      text = `${t.events(recordings.length)} ${label}`;
+      const first = recordings[0].start;
+      const last = recordings[recordings.length - 1].start;
+      details.push(first === last ? t.sumAt(this._time(first)) : t.sumBetween(this._time(first), this._time(last)));
+      const perCamera = {};
+      recordings.forEach((r) => (perCamera[r.camera_name] = (perCamera[r.camera_name] || 0) + 1));
+      if (Object.keys(perCamera).length > 1) {
+        details.push(Object.entries(perCamera).map(([name, n]) => `${this._esc(name)} ${n}`).join(", "));
+      }
+      details.push(unseen ? t.sumUnseen(unseen) : t.sumAllSeen);
+    }
+    const icon = !recordings.length ? "mdi:shield-check-outline" : unseen ? "mdi:motion-sensor" : "mdi:check-circle-outline";
+    slot.innerHTML = `<div class="summary ${unseen ? "has-unseen" : ""}">
+        <button class="summary-main" data-act="summary-open" ${recordings.length ? "" : "disabled"}>
+          <ha-icon icon="${icon}"></ha-icon>
+          <span class="summary-text"><b>${text}</b>${details.length ? `<span class="summary-detail">${details.join(" · ")}</span>` : ""}</span>
+        </button>
+        <button class="icon small" data-act="summary-dismiss" title="${t.dismiss}"><ha-icon icon="mdi:close"></ha-icon></button>
+      </div>`;
   }
 
   _time(ts, withDay = false) {
@@ -315,7 +460,7 @@ class SSRecordingsCard extends HTMLElement {
     const variant = this._config.variant === "plain" ? "plain" : "glass";
     const maxHeight = Number(this._config.max_height) || 0;
     this.shadowRoot.innerHTML = `<style>${STYLE}</style>
-      <ha-card class="${variant}"><div class="head"></div><div class="slot"></div>
+      <ha-card class="${variant}"><div class="head"></div><div class="summary-slot"></div><div class="slot"></div>
         <div class="body" style="${maxHeight ? `max-height:${maxHeight}px;overflow-y:auto` : ""}"></div></ha-card>`;
     this.shadowRoot.querySelector("ha-card").addEventListener("click", (ev) => {
       const el = ev.target.closest("[data-i],[data-act]");
@@ -329,6 +474,7 @@ class SSRecordingsCard extends HTMLElement {
     if (!this.shadowRoot || !this._config) return;
     this._shell();
     this._renderHead();
+    this._renderSummary();
     this._renderBody();
   }
 
@@ -522,6 +668,21 @@ class SSRecordingsCard extends HTMLElement {
       if (next < 0 || next >= nights.length) return;
       this._nightIdx = next;
       this._reload();
+    } else if (act === "summary-dismiss") {
+      if (!this._summary) return;
+      saveDismissed([...loadDismissed(), this._summary.night.since]);
+      this._renderSummary();
+    } else if (act === "summary-open") {
+      const nights = this._nights();
+      const index = defaultNightIndex(this._config, nights);
+      if (this._view === "night" && this._nightIdx === index && this._items) {
+        this._action("all");
+        return;
+      }
+      this._view = "night";
+      this._nightIdx = index;
+      this._playAfterLoad = true;
+      this._reload();
     } else if (act === "seen") {
       const seen = loadSeen();
       this._items.forEach((r) => seen.add(this._key(r)));
@@ -580,6 +741,25 @@ const STYLE = `
   .head-text { min-width: 0; flex: 1 1 220px; }
   .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .title-row { display: flex; align-items: center; gap: 6px; }
+  .summary {
+    position: relative; display: flex; align-items: center; gap: 4px; margin: 0 18px 10px;
+    padding: 4px 4px 4px 12px; border-radius: 12px;
+    background: rgba(140, 140, 140, .12);
+    background: color-mix(in srgb, var(--primary-text-color) 6%, transparent);
+    border: 1px solid rgba(140, 140, 140, .18);
+    border: 1px solid color-mix(in srgb, var(--primary-text-color) 8%, transparent);
+  }
+  .summary.has-unseen {
+    background: color-mix(in srgb, var(--ss-accent) 14%, transparent);
+    border-color: color-mix(in srgb, var(--ss-accent) 35%, transparent);
+  }
+  .summary-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 6px 0; text-align: left; }
+  .summary-main[disabled] { cursor: default; }
+  .summary-main ha-icon { flex-shrink: 0; color: var(--secondary-text-color); --mdc-icon-size: 22px; }
+  .summary.has-unseen .summary-main ha-icon { color: var(--ss-accent); }
+  .summary-text { min-width: 0; display: flex; flex-wrap: wrap; column-gap: 8px; font-size: .9em; color: var(--primary-text-color); }
+  .summary-text b { font-weight: 500; }
+  .summary-detail { color: var(--secondary-text-color); }
   .nav { display: flex; }
   .icon.small { width: 30px; height: 30px; }
   .icon[disabled] { opacity: .3; cursor: default; pointer-events: none; }
@@ -670,6 +850,9 @@ const EDITOR_DEFAULTS = {
   night_start: "20:00",
   night_end: "07:00",
   show_toggle: true,
+  summary: "unseen",
+  summary_from: "",
+  summary_until: "",
   cameras: [],
   title: "",
   variant: "glass",
@@ -744,6 +927,31 @@ class SSRecordingsCardEditor extends HTMLElement {
         type: "expandable",
         name: "",
         flatten: true,
+        title: t.sec_summary,
+        icon: "mdi:text-box-outline",
+        schema: [
+          {
+            name: "summary",
+            selector: select([
+              ["unseen", t.opt_sum_unseen],
+              ["always", t.opt_sum_always],
+              ["never", t.opt_sum_never],
+            ]),
+          },
+          {
+            type: "grid",
+            name: "",
+            schema: [
+              { name: "summary_from", selector: { time: { no_second: true } } },
+              { name: "summary_until", selector: { time: { no_second: true } } },
+            ],
+          },
+        ],
+      },
+      {
+        type: "expandable",
+        name: "",
+        flatten: true,
         title: t.sec_cameras,
         icon: "mdi:cctv",
         schema: [
@@ -812,13 +1020,13 @@ class SSRecordingsCardEditor extends HTMLElement {
     this._form.schema = this._schema();
     this._form.computeLabel = (schema) => t[schema.name] ?? schema.name;
     this._form.computeHelper = (schema) =>
-      ({ title: t.h_title, night_start: t.h_night })[schema.name];
+      ({ title: t.h_title, night_start: t.h_night, summary_from: t.h_summary_window })[schema.name];
   }
 
   _changed(ev) {
     ev.stopPropagation();
     const value = { ...ev.detail.value };
-    for (const key of ["night_start", "night_end"]) {
+    for (const key of ["night_start", "night_end", "summary_from", "summary_until"]) {
       if (typeof value[key] === "string" && /^\d{2}:\d{2}:00$/.test(value[key])) {
         value[key] = value[key].slice(0, 5);
       }
